@@ -4,33 +4,21 @@
 using namespace std;
 
 double timeInterval = 0.5;
-//double kProb = 0.6, kDer = 0.03, kInt = 0.0002;
-//double kProb = 0.8, kDer = 0.5, kInt = 0;
-double kProb = 1, kDer = 0.5, kInt = 0;
-//double kProb = 0.8, kDer = 0.3, kInt = 0;
 
-
-bool checkWall(ArRangeDevice &sensor, double startAngle, double endAngle, double target)
+double calcPID(double closestReading, double target, double &integral, double &prevError)
 {
-	if (sensor.currentReadingPolar(startAngle, endAngle) < target*1.5) {
-		return true;
-	}
-	return false;
-}
-
-double calcPID(ArRangeDevice &sensor, double &integral, double &prevErr, double startAngle, double endAngle, double target)
-{
-	double err = target - sensor.currentReadingPolar(startAngle, endAngle);
+	double kProb = 1, kDer = 0.8, kInt = 0.002;
+	//double kProb = 2, kDer = 1.8, kInt = 0.5;
+	double err = target - closestReading;
 	integral += err*timeInterval;
-	double derivative = (err-prevErr)/timeInterval;
-	prevErr = err;
+	double derivative = (err-prevError)/timeInterval;
+	prevError = err;
 	return kProb*err + kInt*integral + kDer*derivative;
 }
 
 void followWall(ArRobot &robot, double pid)
 {
-	double e1 = 0, e2 = 0;
-    double v1 = 300, v2 = 300;
+	double e1 = 0, e2 = 0, v1 = 200, v2 = 200;
 
     if (pid > 0) {
         e1 = pid;
@@ -44,7 +32,7 @@ void followWall(ArRobot &robot, double pid)
     }
     cout << "v1 " << v1 << " v1-e1 " << v1-e1;
     cout << " v2 " << v2 << " v2-e2 " << v2-e2 << endl;
-    robot.setVel2(v1-e1,v2-e2);
+    robot.setVel2(v1-e1, v2-e2);
 }
 
 int main(int argc, char** argv)
@@ -81,29 +69,51 @@ int main(int argc, char** argv)
 		}
 	}
 
-	int sonars[8];
-	vector<ArSensorReading>* sickReadings;
-
-    double leftIntegral = 0, leftPrevError = 0, rightIntegral = 0, rightPrevError = 0;
-	double frontStartAngle = -30, frontFinishAngle = 30, frontDesire = 1000;
+	bool following, leftFollowing = false, rightFollowing = false
+	, frontWall = false, leftWall = false, rightWall = false;
+    double leftIntegral = 0, leftPrevError = 0, leftStartAngle = 30, leftEndAngle = 60
+    , rightIntegral = 0, rightPrevError = 0, rightStartAngle = -30, rightEndAngle = -60
+    , frontStartAngle = -30, frontEndAngle = 30
+	, target = 1000, range = 1500;
 
 	robot.enableMotors();
 	while (Aria::getRunning()) {
 		robot.lock();
-
-		//for (int i=0;i<8;i++) sonars[i] = robot.getSonarRange(i);
-
-		//sick.lockDevice();
-		//sickReadings = sick.getRawReadingsAsVector();
-		//sick.unlockDevice();
-
-
-		if (checkWall(sick, 30, 60, 1000)) {
-			followWall(robot, calcPID(sick, leftIntegral, leftPrevError, 30, 60, 1000));
+		frontWall = (sick.currentReadingPolar(frontStartAngle, frontEndAngle) < range);
+		leftWall = (sick.currentReadingPolar(leftStartAngle, leftEndAngle) < range);
+		rightWall = (sick.currentReadingPolar(rightStartAngle, rightEndAngle) < range);
+		following = false;
+		if (frontWall) {
+			robot.setVel2(0, 0);
+			if (rightWall) {//turning left
+				robot.setDeltaHeading(45);
+			} else {//default or left wall, turn right
+				robot.setDeltaHeading(-45);
+			}
 		}
-		if (checkWall(sick, -30, -60, 1000)) {
-			if (sick.currentReadingPolar(-30, -60) < sick.currentReadingPolar(30, 60)) {
-				followWall(robot, calcPID(sick, rightIntegral, rightPrevError, -30, -60, 1000));
+
+		if (leftWall) {//sticking to the wall
+			following = true;
+			leftFollowing = true;
+			rightFollowing = false;
+			followWall(robot, calcPID(sick.currentReadingPolar(leftStartAngle, leftEndAngle), target, leftIntegral, leftPrevError));
+		}
+		if (rightWall) {
+			following = true;
+			rightFollowing = true;
+			leftFollowing = false;
+			followWall(robot, calcPID(sick.currentReadingPolar(rightStartAngle, rightEndAngle), target, rightIntegral, rightPrevError));
+		}
+
+		if (following == false) {
+			if (leftFollowing) {//small turn, just checking if it was a sharp wall edge
+				robot.setDeltaHeading(45);
+				leftFollowing = false;
+			} else if (rightFollowing) {
+				robot.setDeltaHeading(-45);
+				rightFollowing = false;
+			} else {//wander
+				robot.setVel2(300, 300);
 			}
 		}
 
